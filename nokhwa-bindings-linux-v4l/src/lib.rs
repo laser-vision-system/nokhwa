@@ -451,7 +451,7 @@ mod internal {
                 // so unwrap should never take the fallback route.
                 // In case it does, we will fallback to 30 fps, which is a reasonable framerate.
                 if let Err(why) = device.set_params(&Parameters::with_fps(
-                    format.frame_rate().fps().unwrap_or(30),
+                    format.frame_rate().fps_or_err()?,
                 )) {
                     return Err(NokhwaError::set_property(
                         "Frame rate",

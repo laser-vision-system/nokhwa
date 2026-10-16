@@ -629,6 +629,13 @@ impl FrameRate {
         self.fps
     }
 
+    pub fn fps_or_err(&self) -> Result<u32, NokhwaError> {
+        match self.fps {
+            None => Err(NokhwaError::GetPropertyError { property: "Framerate".to_string(), error: "Framerate is not defined.".to_string() }),
+            Some(fps) => Ok(fps)
+        }
+    }
+
     // Helper function to check if the framerate exists. If it does not, then the framerate is invalid.
     pub fn exists(&self) -> bool {
         self.fps.is_some()
