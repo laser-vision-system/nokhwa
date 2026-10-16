@@ -635,7 +635,8 @@ impl FrameRate {
     }
 
     pub fn from_fps(fps: u32) -> Self {
-        Self { fps: Some(fps) }
+        let fps = if fps == 0 { None } else { Some(fps) };
+        Self { fps }
     }
 
     /// If framerate exists, returns the numerator.
