@@ -602,7 +602,7 @@ impl Ord for Resolution {
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct FrameRate {
-    fps: Option<u32>,
+    fps: Option<NonZeroU32>,
 }
 
 impl FrameRate {
