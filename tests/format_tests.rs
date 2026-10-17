@@ -61,7 +61,7 @@ fn camera_format_default_values() {
     let fmt = CameraFormat::default();
     assert_eq!(fmt.resolution(), Resolution::new(640, 480));
     assert_eq!(fmt.format(), FrameFormat::MJPEG);
-    assert_eq!(fmt.frame_rate(), 30);
+    assert_eq!(fmt.frame_rate(), FrameRate::from_fps(30));
 }
 
 #[test]

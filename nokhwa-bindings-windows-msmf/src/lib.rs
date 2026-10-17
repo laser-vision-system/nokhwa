@@ -1885,7 +1885,7 @@ mod stub {
                 &dev.set_format(CameraFormat::new(
                     Resolution::new(640, 480),
                     FrameFormat::MJPEG,
-                    30,
+                    FrameRate::from_fps(30),
                 ))
                 .expect_err("stub set_format() must error"),
             );

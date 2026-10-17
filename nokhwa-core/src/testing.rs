@@ -31,7 +31,7 @@ use crate::traits::{
 };
 use crate::types::{
     ApiBackend, CameraControl, CameraFormat, CameraIndex, CameraInfo, ControlValueSetter,
-    FrameFormat, KnownCameraControl, Resolution,
+    FrameFormat, FrameRate, KnownCameraControl, Resolution,
 };
 
 /// Build a deterministic [`CameraInfo`] for tests.
@@ -63,7 +63,11 @@ pub fn mock_frame(width: u32, height: u32, format: FrameFormat) -> Buffer {
 }
 
 fn default_format() -> CameraFormat {
-    CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30)
+    CameraFormat::new(
+        Resolution::new(640, 480),
+        FrameFormat::YUYV,
+        FrameRate::from_fps(30),
+    )
 }
 
 /// A simple continuous-frame mock backend.
@@ -743,9 +747,13 @@ mod tests {
         let default_fmt = src.negotiated_format();
         assert_eq!(default_fmt.resolution(), Resolution::new(640, 480));
         assert_eq!(default_fmt.format(), FrameFormat::YUYV);
-        assert_eq!(default_fmt.frame_rate(), 30);
+        assert_eq!(default_fmt.frame_rate(), FrameRate::from_fps(30));
 
-        let new_fmt = CameraFormat::new(Resolution::new(1920, 1080), FrameFormat::MJPEG, 60);
+        let new_fmt = CameraFormat::new(
+            Resolution::new(1920, 1080),
+            FrameFormat::MJPEG,
+            FrameRate::from_fps(60),
+        );
         src.set_format(new_fmt).unwrap();
         assert_eq!(src.negotiated_format(), new_fmt);
         assert_eq!(src.compatible_formats().unwrap(), vec![new_fmt]);

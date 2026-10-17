@@ -661,7 +661,7 @@ impl AVCaptureDeviceWrapper {
                     CameraFormat::new(resolution, av_fmt.fourcc, fps)
                 })
             })
-            .filter(|x| x.frame_rate() != 0)
+            .filter(|x| x.frame_rate() != FrameRate::from_fps(0))
             .collect())
     }
 

@@ -21,7 +21,7 @@ use crate::traits::{
 };
 use crate::types::{
     ApiBackend, CameraControl, CameraFormat, CameraIndex, CameraInfo, ControlValueSetter,
-    FrameFormat, KnownCameraControl, Resolution,
+    FrameFormat, FrameRate, KnownCameraControl, Resolution,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -408,7 +408,7 @@ impl FrameSource for FormatStub {
 fn stub(format: FrameFormat, w: u32, h: u32) -> FormatStub {
     FormatStub {
         info: sample_info(),
-        fmt: CameraFormat::new(Resolution::new(w, h), format, 30),
+        fmt: CameraFormat::new(Resolution::new(w, h), format, FrameRate::from_fps(30)),
     }
 }
 
@@ -553,7 +553,11 @@ impl FrameSource for FrameCallCounter {
 fn frame_timeout_default_forwards_to_frame() {
     let mut c = FrameCallCounter {
         info: sample_info(),
-        fmt: CameraFormat::new(Resolution::new(640, 480), FrameFormat::YUYV, 30),
+        fmt: CameraFormat::new(
+            Resolution::new(640, 480),
+            FrameFormat::YUYV,
+            FrameRate::from_fps(30),
+        ),
         frame_calls: 0,
     };
     let _ = c.frame_timeout(Duration::from_millis(50));

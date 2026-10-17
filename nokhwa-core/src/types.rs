@@ -1,11 +1,23 @@
-use crate::error::NokhwaError;
-use crate::format_types::CaptureFormat;
-#[cfg(feature = "serialize")]
-use serde::{Deserialize, Serialize};
 use std::{
     cmp::Ordering,
-    fmt::{Display, Formatter},
+    fmt::{
+        Display,
+        Formatter,
+    },
+    ops::Sub,
     str::FromStr,
+};
+
+use num_rational::Ratio;
+#[cfg(feature = "serialize")]
+use serde::{
+    Deserialize,
+    Serialize,
+};
+
+use crate::{
+    error::NokhwaError,
+    format_types::CaptureFormat,
 };
 
 /// Tells the init function what camera format to pick.
@@ -42,8 +54,9 @@ impl Display for RequestedFormatType {
 
 /// A request to the camera for a valid [`CameraFormat`].
 ///
-/// Combines a [`RequestedFormatType`] (what resolution/framerate strategy to use) with
-/// a set of acceptable [`FrameFormat`]s (pixel formats the caller can decode).
+/// Combines a [`RequestedFormatType`] (what resolution/framerate strategy to
+/// use) with a set of acceptable [`FrameFormat`]s (pixel formats the caller can
+/// decode).
 ///
 /// # Examples
 ///
@@ -135,8 +148,9 @@ impl RequestedFormat<'_> {
     /// The format constraint is derived from `F::FRAME_FORMAT`.
     #[must_use]
     pub fn new<F: CaptureFormat>(requested: RequestedFormatType) -> RequestedFormat<'static> {
-        // FRAME_FORMAT is a const, so &[F::FRAME_FORMAT] is promoted to static memory
-        // by the compiler (constant promotion). No heap allocation occurs.
+        // FRAME_FORMAT is a const, so &[F::FRAME_FORMAT] is promoted to static
+        // memory by the compiler (constant promotion). No heap
+        // allocation occurs.
         let formats: &'static [FrameFormat] = &[F::FRAME_FORMAT];
         RequestedFormat {
             requested_format: requested,
@@ -144,8 +158,9 @@ impl RequestedFormat<'_> {
         }
     }
 
-    /// Creates a new [`RequestedFormat`] by using the [`RequestedFormatType`] and getting the [`FrameFormat`]
-    /// constraints from a statically allocated slice.
+    /// Creates a new [`RequestedFormat`] by using the [`RequestedFormatType`]
+    /// and getting the [`FrameFormat`] constraints from a statically
+    /// allocated slice.
     #[must_use]
     pub fn with_formats(
         requested: RequestedFormatType,
@@ -217,6 +232,7 @@ impl RequestedFormat<'_> {
                     .copied()
             },
             RequestedFormatType::HighestFrameRate(fps) => {
+                let fps = FrameRate::from_fps(fps);
                 let highest_res = all_formats
                     .iter()
                     .filter(|x| x.frame_rate == fps && self.wanted_decoder.contains(&x.format()))
@@ -270,15 +286,15 @@ impl RequestedFormat<'_> {
                         }
                         None
                     })
-                    .collect::<Vec<u32>>();
+                    .collect::<Vec<FrameRate>>();
                 // sort FPSes
                 let mut framerate_map = frame_rates
                     .iter()
                     .map(|x| {
-                        let abs = *x as i32 - c.frame_rate() as i32;
-                        (abs.unsigned_abs(), *x)
+                        let abs = *x - c.frame_rate();
+                        (abs, *x)
                     })
-                    .collect::<Vec<(u32, u32)>>();
+                    .collect::<Vec<(FrameRate, FrameRate)>>();
                 framerate_map.sort_by_key(|a| a.0);
                 let frame_rate = framerate_map.first()?.1;
                 Some(CameraFormat::new(resolution, c.format(), frame_rate))
@@ -308,8 +324,8 @@ pub enum CameraIndex {
 }
 
 impl CameraIndex {
-    /// Turns this value into a number. If it is a string, it will attempt to parse it as a `u32`.
-    /// # Errors
+    /// Turns this value into a number. If it is a string, it will attempt to
+    /// parse it as a `u32`. # Errors
     /// Fails if the value is not a number.
     pub fn as_index(&self) -> Result<u32, NokhwaError> {
         match self {
@@ -320,7 +336,8 @@ impl CameraIndex {
         }
     }
 
-    /// Turns this value into a `String`. If it is a number, it will be automatically converted.
+    /// Turns this value into a `String`. If it is a number, it will be
+    /// automatically converted.
     #[must_use]
     pub fn as_string(&self) -> String {
         match self {
@@ -373,11 +390,14 @@ impl TryFrom<CameraIndex> for usize {
     }
 }
 
-/// Describes a frame format (i.e. how the bytes themselves are encoded). Often called `FourCC`.
+/// Describes a frame format (i.e. how the bytes themselves are encoded). Often
+/// called `FourCC`.
 /// - YUYV is a mathematical color space. You can read more [here.](https://en.wikipedia.org/wiki/YCbCr)
-/// - NV12 is same as above. Note that a partial compression (e.g. [16, 235] may be coerced to [0, 255].
+/// - NV12 is same as above. Note that a partial compression (e.g. [16, 235] may
+///   be coerced to [0, 255].
 /// - MJPEG is a motion-jpeg compressed frame, it allows for high frame rates.
-/// - GRAY is a grayscale image format, usually for specialized cameras such as IR Cameras.
+/// - GRAY is a grayscale image format, usually for specialized cameras such as
+///   IR Cameras.
 /// - RAWRGB is a Raw RGB888 format.
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
@@ -434,7 +454,8 @@ impl FromStr for FrameFormat {
 }
 
 impl FrameFormat {
-    /// Converts a `FourCC` string (e.g. `"YUYV"`, `"MJPG"`) into a [`FrameFormat`].
+    /// Converts a `FourCC` string (e.g. `"YUYV"`, `"MJPG"`) into a
+    /// [`FrameFormat`].
     ///
     /// This centralises the canonical FourCC-to-frame-format mapping so that
     /// platform backends do not each have to duplicate the same table.
@@ -589,20 +610,147 @@ impl Ord for Resolution {
     }
 }
 
-/// This is a convenience struct that holds all information about the format of a webcam stream.
-/// It consists of a [`Resolution`], [`FrameFormat`], and a frame rate(u8).
+/// A new type for the capture rate of a camera in frames per second.
+///
+/// The inner value of this type is an `Option<>`.`
+/// This is because some cameras will not report a legitimate framerate
+/// (where the denominator for the fps ratio is zero).
+/// In these cases, the framerate will instead be None.
+/// This must be handled by each call to get the framerate.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
+pub struct FrameRate {
+    fps: Option<NonZeroU32>,
+}
+
+impl FrameRate {
+    pub fn new(mut numerator: u32, mut denominator: u32) -> Self {
+        if numerator > 1 && numerator < denominator {
+            if denominator % numerator != 0 {
+                return Self { fps: None };
+            } else {
+                denominator = denominator / numerator;
+                numerator = 1;
+            }
+        }
+        // Neither numerator nor denominator can be zero
+        if numerator != 1 || denominator == 0 {
+            Self { fps: None }
+        } else {
+            Self {
+                fps: Some(denominator),
+            }
+        }
+    }
+
+    pub fn fps(&self) -> Option<u32> {
+        self.fps
+    }
+
+    pub fn fps_or_err(&self) -> Result<u32, NokhwaError> {
+        match self.fps {
+            None => Err(NokhwaError::GetPropertyError {
+                property: "Framerate".to_string(),
+                error: "Framerate is not defined.".to_string(),
+            }),
+            Some(fps) => Ok(fps),
+        }
+    }
+
+    // Helper function to check if the framerate exists. If it does not, then
+    // the framerate is invalid.
+    pub fn exists(&self) -> bool {
+        self.fps.is_some()
+    }
+
+    pub fn from_fps(fps: u32) -> Self {
+        let fps = if fps == 0 { None } else { Some(fps) };
+        Self { fps }
+    }
+
+    /// If framerate exists, returns the numerator.
+    ///
+    /// If framerate does not exists, returns None.
+    pub fn numerator(&self) -> Option<u32> {
+        match self.fps {
+            Some(_) => Some(1),
+            None => None,
+        }
+    }
+
+    /// If framerate exists, returns the denominator.
+    ///
+    /// If framerate does not exists, returns None.
+    pub fn denominator(&self) -> Option<u32> {
+        self.fps
+    }
+}
+
+impl Default for FrameRate {
+    fn default() -> Self {
+        FrameRate { fps: Some(30) }
+    }
+}
+
+impl Display for FrameRate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.fps {
+            Some(_) => write!(
+                f,
+                "{}/{}",
+                self.numerator().unwrap_or(0),
+                self.denominator().unwrap_or(0)
+            ),
+            None => write!(f, ""),
+        }
+    }
+}
+
+/// Subtracts two [`FrameRate`]s and returns the result as a new [`FrameRate`].
+///
+/// Underflow is handled by first converting to i32, subtracting, and then
+/// converting back to u32. This will return the absolute value of the
+/// operation.
+impl Sub for FrameRate {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        if self.fps == None || rhs.fps == None {
+            // This will build a FrameRate with a None value, which is invalid.
+            // This should be avoided where possible.
+            FrameRate { fps: None }
+        } else {
+            let lhs: Ratio<i32> = Ratio::<i32>::new(1, self.fps.unwrap() as i32);
+            let rhs: Ratio<i32> = Ratio::<i32>::new(1, rhs.fps.unwrap() as i32);
+
+            let result = lhs - rhs;
+
+            if *result.numer() != 1 || *result.denom() == 0 {
+                return FrameRate { fps: None };
+            }
+
+            FrameRate {
+                fps: Some(result.denom().unsigned_abs() as u32),
+            }
+        }
+    }
+}
+
+/// This is a convenience struct that holds all information about the format of
+/// a webcam stream. It consists of a [`Resolution`], [`FrameFormat`], and a
+/// [`FrameRate`].
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct CameraFormat {
     resolution: Resolution,
     format: FrameFormat,
-    frame_rate: u32,
+    frame_rate: FrameRate,
 }
 
 impl CameraFormat {
     /// Construct a new [`CameraFormat`]
     #[must_use]
-    pub fn new(resolution: Resolution, format: FrameFormat, frame_rate: u32) -> Self {
+    pub fn new(resolution: Resolution, format: FrameFormat, frame_rate: FrameRate) -> Self {
         CameraFormat {
             resolution,
             format,
@@ -612,7 +760,7 @@ impl CameraFormat {
 
     /// [`CameraFormat::new()`], but raw.
     #[must_use]
-    pub fn new_from(res_x: u32, res_y: u32, format: FrameFormat, fps: u32) -> Self {
+    pub fn new_from(res_x: u32, res_y: u32, format: FrameFormat, fps: FrameRate) -> Self {
         CameraFormat {
             resolution: Resolution {
                 width_x: res_x,
@@ -648,12 +796,12 @@ impl CameraFormat {
 
     /// Get the frame rate of the current [`CameraFormat`]
     #[must_use]
-    pub fn frame_rate(&self) -> u32 {
+    pub fn frame_rate(&self) -> FrameRate {
         self.frame_rate
     }
 
     /// Set the [`CameraFormat`]'s frame rate.
-    pub fn set_frame_rate(&mut self, frame_rate: u32) {
+    pub fn set_frame_rate(&mut self, frame_rate: FrameRate) {
         self.frame_rate = frame_rate;
     }
 
@@ -674,7 +822,7 @@ impl Default for CameraFormat {
         CameraFormat {
             resolution: Resolution::new(640, 480),
             format: FrameFormat::MJPEG,
-            frame_rate: 30,
+            frame_rate: FrameRate::default(),
         }
     }
 }
@@ -690,8 +838,10 @@ impl Display for CameraFormat {
 }
 
 /// Information about a Camera e.g. its name.
-/// `description` amd `misc` may contain information that may differ from backend to backend. Refer to each backend for details.
-/// `index` is a camera's index given to it by (usually) the OS usually in the order it is known to the system.
+/// `description` amd `misc` may contain information that may differ from
+/// backend to backend. Refer to each backend for details. `index` is a camera's
+/// index given to it by (usually) the OS usually in the order it is known to
+/// the system.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct CameraInfo {
@@ -770,8 +920,8 @@ impl Display for CameraInfo {
 /// The list of known camera controls to the library. <br>
 /// These can control the picture brightness, etc. <br>
 /// Note that not all backends/devices support all these. Call
-/// [`CameraDevice::controls()`](crate::traits::CameraDevice::controls) to see which
-/// ones are reported by a given backend.
+/// [`CameraDevice::controls()`](crate::traits::CameraDevice::controls) to see
+/// which ones are reported by a given backend.
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum KnownCameraControl {
@@ -796,9 +946,11 @@ pub enum KnownCameraControl {
     PowerLineFrequency,
     ExposureAutoPriority,
     /// Other camera control. Listed is the ID.
-    /// Wasteful, however is needed for a unified API across Windows, Linux, and `MacOSX` due to Microsoft's usage of `GUIDs`.
+    /// Wasteful, however is needed for a unified API across Windows, Linux, and
+    /// `MacOSX` due to Microsoft's usage of `GUIDs`.
     ///
-    /// THIS SHOULD ONLY BE USED WHEN YOU KNOW THE PLATFORM THAT YOU ARE RUNNING ON.
+    /// THIS SHOULD ONLY BE USED WHEN YOU KNOW THE PLATFORM THAT YOU ARE RUNNING
+    /// ON.
     Other(u128),
 }
 
@@ -831,11 +983,15 @@ pub const fn all_known_camera_controls() -> [KnownCameraControl; KnownCameraCont
 }
 
 impl KnownCameraControl {
+    /// Number of standard (non-`Other`) controls.
+    pub const STANDARD_COUNT: usize = 20;
+
     /// Returns a canonical zero-based index for each standard control.
     ///
-    /// Platform backends can use this together with [`from_index`](Self::from_index)
-    /// and a platform-specific ID table to avoid duplicating the full match arms.
-    /// Returns `None` for the `Other` variant.
+    /// Platform backends can use this together with
+    /// [`from_index`](Self::from_index) and a platform-specific ID table to
+    /// avoid duplicating the full match arms. Returns `None` for the
+    /// `Other` variant.
     #[must_use]
     pub const fn as_index(&self) -> Option<u8> {
         match self {
@@ -863,9 +1019,11 @@ impl KnownCameraControl {
         }
     }
 
-    /// Converts a canonical zero-based index back into a [`KnownCameraControl`].
+    /// Converts a canonical zero-based index back into a
+    /// [`KnownCameraControl`].
     ///
-    /// The index values correspond to those returned by [`as_index`](Self::as_index).
+    /// The index values correspond to those returned by
+    /// [`as_index`](Self::as_index).
     #[must_use]
     pub const fn from_index(index: u8) -> Option<Self> {
         match index {
@@ -893,14 +1051,12 @@ impl KnownCameraControl {
         }
     }
 
-    /// Number of standard (non-`Other`) controls.
-    pub const STANDARD_COUNT: usize = 20;
-
     /// Look up a [`KnownCameraControl`] from a platform-specific ID using a
     /// table that maps canonical indices to platform IDs.
     ///
-    /// `platform_ids` must have exactly [`STANDARD_COUNT`](Self::STANDARD_COUNT)
-    /// entries, one per canonical index.
+    /// `platform_ids` must have exactly
+    /// [`STANDARD_COUNT`](Self::STANDARD_COUNT) entries, one per canonical
+    /// index.
     ///
     /// **Note:** This helper uses `u32` platform IDs, which is suitable for
     /// V4L2 CIDs.  Windows Media Foundation uses GUIDs that do not fit in
@@ -909,7 +1065,8 @@ impl KnownCameraControl {
     pub fn from_platform_id(platform_id: u32, platform_ids: &[u32; Self::STANDARD_COUNT]) -> Self {
         for (idx, &pid) in platform_ids.iter().enumerate() {
             if pid == platform_id {
-                // idx is always 0..14 because STANDARD_COUNT == 15, so this cast is safe.
+                // idx is always 0..14 because STANDARD_COUNT == 15, so this
+                // cast is safe.
                 #[allow(clippy::cast_possible_truncation)]
                 if let Some(ctrl) = Self::from_index(idx as u8) {
                     return ctrl;
@@ -947,8 +1104,8 @@ impl Display for KnownCameraControl {
     }
 }
 
-/// This tells you weather a [`KnownCameraControl`] is automatically managed by the OS/Driver
-/// or manually managed by you, the programmer.
+/// This tells you weather a [`KnownCameraControl`] is automatically managed by
+/// the OS/Driver or manually managed by you, the programmer.
 #[derive(Copy, Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum KnownCameraControlFlag {
@@ -967,7 +1124,8 @@ impl Display for KnownCameraControlFlag {
     }
 }
 
-/// The different types of menu items that can appear in [`ControlValueDescription::Menu`].
+/// The different types of menu items that can appear in
+/// [`ControlValueDescription::Menu`].
 #[derive(Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub enum MenuItem {
@@ -1128,7 +1286,8 @@ impl ControlValueDescription {
         }
     }
 
-    /// Verifies if the [setter](ControlValueSetter) is valid for the provided [`ControlValueDescription`].
+    /// Verifies if the [setter](ControlValueSetter) is valid for the provided
+    /// [`ControlValueDescription`].
     /// - `true` => Is valid.
     /// - `false` => Is not valid.
     ///
@@ -1346,10 +1505,11 @@ impl Display for ControlValueDescription {
 
 /// This struct tells you everything about a particular [`KnownCameraControl`].
 ///
-/// However, you should never need to instantiate this struct, since its usually generated for you by `nokhwa`.
-/// The only time you should be modifying this struct is when you need to set a value and pass it back to the camera.
-/// NOTE: Assume the values for `min` and `max` as **non-inclusive**!.
-/// E.g. if the [`CameraControl`] says `min` is 100, the minimum is actually 101.
+/// However, you should never need to instantiate this struct, since its usually
+/// generated for you by `nokhwa`. The only time you should be modifying this
+/// struct is when you need to set a value and pass it back to the camera. NOTE:
+/// Assume the values for `min` and `max` as **non-inclusive**!. E.g. if the
+/// [`CameraControl`] says `min` is 100, the minimum is actually 101.
 #[derive(Clone, Debug, PartialOrd, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
 pub struct CameraControl {
@@ -1391,7 +1551,8 @@ impl CameraControl {
         &self.description
     }
 
-    /// Gets the [`ControlValueSetter`] of the [`ControlValueDescription`] of this [`CameraControl`]
+    /// Gets the [`ControlValueSetter`] of the [`ControlValueDescription`] of
+    /// this [`CameraControl`]
     #[must_use]
     pub fn value(&self) -> ControlValueSetter {
         self.description.value()
@@ -1593,11 +1754,13 @@ impl Display for ControlValueSetter {
 }
 
 /// The list of known capture backends to the library. <br>
-/// - `AUTO` is special - it tells the Camera struct to automatically choose a backend most suited for the current platform.
+/// - `AUTO` is special - it tells the Camera struct to automatically choose a
+///   backend most suited for the current platform.
 /// - `AVFoundation` - Uses `AVFoundation` on `MacOSX`
 /// - `Video4Linux` - `Video4Linux2`, a linux specific backend.
 /// - `MediaFoundation` - Microsoft Media Foundation, Windows only.
-/// - `GStreamer` - Cross-platform `GStreamer` backend. Also handles IP / RTSP / HTTP / file URLs via `CameraIndex::String`.
+/// - `GStreamer` - Cross-platform `GStreamer` backend. Also handles IP / RTSP /
+///   HTTP / file URLs via `CameraIndex::String`.
 /// - `Browser` - Uses browser APIs to capture from a webcam.
 #[derive(Clone, Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cfg_attr(feature = "serialize", derive(Serialize, Deserialize))]
@@ -1618,12 +1781,13 @@ impl Display for ApiBackend {
     }
 }
 
-/// Converts a MJPEG stream of `&[u8]` into a `Vec<u8>` of RGB888. (R,G,B,R,G,B,...)
-/// # Errors
-/// If `mozjpeg` fails to read scanlines or setup the decompressor, this will error.
-/// # Safety
+/// Converts a MJPEG stream of `&[u8]` into a `Vec<u8>` of RGB888.
+/// (R,G,B,R,G,B,...) # Errors
+/// If `mozjpeg` fails to read scanlines or setup the decompressor, this will
+/// error. # Safety
 /// This function uses `unsafe`. The caller must ensure that:
-/// - The input data is of the right size, does not exceed bounds, and/or the final size matches with the initial size.
+/// - The input data is of the right size, does not exceed bounds, and/or the
+///   final size matches with the initial size.
 #[cfg(all(feature = "mjpeg", not(target_arch = "wasm32")))]
 #[cfg_attr(feature = "docs-features", doc(cfg(feature = "mjpeg")))]
 #[inline]
@@ -1687,7 +1851,8 @@ pub fn mjpeg_to_rgb(_data: &[u8], _rgba: bool) -> Result<Vec<u8>, NokhwaError> {
 
 /// Equivalent to [`mjpeg_to_rgb`] except with a destination buffer.
 /// # Errors
-/// If the decoding fails (e.g. invalid MJPEG stream), the buffer is not large enough, or you are doing this on `WebAssembly`, this will error.
+/// If the decoding fails (e.g. invalid MJPEG stream), the buffer is not large
+/// enough, or you are doing this on `WebAssembly`, this will error.
 #[cfg(all(feature = "mjpeg", not(target_arch = "wasm32")))]
 #[cfg_attr(feature = "docs-features", doc(cfg(feature = "mjpeg")))]
 #[inline]
@@ -1740,8 +1905,8 @@ pub fn buf_mjpeg_to_rgb(data: &[u8], dest: &mut [u8], rgba: bool) -> Result<(), 
     Ok(())
 }
 
-/// Converts MJPEG to RGB into a destination buffer (stub for non-MJPEG/WASM builds).
-/// # Errors
+/// Converts MJPEG to RGB into a destination buffer (stub for non-MJPEG/WASM
+/// builds). # Errors
 /// Always returns `NokhwaError::NotImplementedError` on unsupported platforms.
 #[cfg(not(all(feature = "mjpeg", not(target_arch = "wasm32"))))]
 pub fn buf_mjpeg_to_rgb(_data: &[u8], _dest: &mut [u8], _rgba: bool) -> Result<(), NokhwaError> {
@@ -1755,23 +1920,26 @@ pub fn buf_mjpeg_to_rgb(_data: &[u8], _dest: &mut [u8], _rgba: bool) -> Result<(
 #[inline]
 pub fn yuyv422_predicted_size(size: usize, rgba: bool) -> usize {
     let pixel_size = if rgba { 4 } else { 3 };
-    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4 for RGBA)
+    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4
+    // for RGBA)
     (size / 4) * (2 * pixel_size)
 }
 
 // For those maintaining this, I recommend you read: https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#yuy2
 // https://en.wikipedia.org/wiki/YUV#Converting_between_Y%E2%80%B2UV_and_RGB
 // and this too: https://stackoverflow.com/questions/16107165/convert-from-yuv-420-to-imagebgr-byte
-// The YUY2(YUYV) format is a 16 bit format. We read 4 bytes at a time to get 6 bytes of RGB888.
-// First, the YUY2 is converted to YCbCr 4:4:4 (4:2:2 -> 4:4:4)
+// The YUY2(YUYV) format is a 16 bit format. We read 4 bytes at a time to get 6
+// bytes of RGB888. First, the YUY2 is converted to YCbCr 4:4:4 (4:2:2 -> 4:4:4)
 // then it is converted to 6 bytes (2 pixels) of RGB888
 /// Converts a YUYV 4:2:2 datastream to a RGB888 Stream. [For further reading](https://en.wikipedia.org/wiki/YUV#Converting_between_Y%E2%80%B2UV_and_RGB)
 /// # Errors
-/// This may error when the data stream size is not divisible by 4, a i32 -> u8 conversion fails, or it fails to read from a certain index.
+/// This may error when the data stream size is not divisible by 4, a i32 -> u8
+/// conversion fails, or it fails to read from a certain index.
 #[inline]
 pub fn yuyv422_to_rgb(data: &[u8], rgba: bool) -> Result<Vec<u8>, NokhwaError> {
     let pixel_size = if rgba { 4 } else { 3 };
-    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4 for RGBA)
+    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4
+    // for RGBA)
     let rgb_buf_size = (data.len() / 4) * (2 * pixel_size);
 
     let mut dest = vec![0; rgb_buf_size];
@@ -1780,9 +1948,10 @@ pub fn yuyv422_to_rgb(data: &[u8], rgba: bool) -> Result<Vec<u8>, NokhwaError> {
     Ok(dest)
 }
 
-/// Same as [`yuyv422_to_rgb`] but with a destination buffer instead of a return `Vec<u8>`
-/// # Errors
-/// If the stream is invalid YUYV, or the destination buffer is not large enough, this will error.
+/// Same as [`yuyv422_to_rgb`] but with a destination buffer instead of a return
+/// `Vec<u8>` # Errors
+/// If the stream is invalid YUYV, or the destination buffer is not large
+/// enough, this will error.
 #[inline]
 pub fn buf_yuyv422_to_rgb(data: &[u8], dest: &mut [u8], rgba: bool) -> Result<(), NokhwaError> {
     if !data.len().is_multiple_of(4) {
@@ -1794,7 +1963,8 @@ pub fn buf_yuyv422_to_rgb(data: &[u8], dest: &mut [u8], rgba: bool) -> Result<()
     }
 
     let pixel_size = if rgba { 4 } else { 3 };
-    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4 for RGBA)
+    // Each 4-byte YUYV chunk yields 2 output pixels (3 bytes each for RGB, 4
+    // for RGBA)
     let rgb_buf_size = (data.len() / 4) * (2 * pixel_size);
 
     if dest.len() != rgb_buf_size {
@@ -2000,7 +2170,8 @@ pub fn buf_nv12_extract_luma(
 
 /// Converts a BGR datastream to RGB, writing into the provided output buffer.
 /// # Errors
-/// Returns `NokhwaError::ProcessFrameError` if the resolution or data size is invalid.
+/// Returns `NokhwaError::ProcessFrameError` if the resolution or data size is
+/// invalid.
 #[allow(clippy::similar_names)]
 #[inline]
 pub fn buf_bgr_to_rgb(
@@ -2011,8 +2182,10 @@ pub fn buf_bgr_to_rgb(
     let width = resolution.width();
     let height = resolution.height();
 
-    let input_size = width as usize * height as usize * 3; // BGR is 3 bytes per pixel
-    let output_size = width as usize * height as usize * 3; // RGB is 3 bytes per pixel
+    let input_size = width as usize * height as usize * 3; // BGR is 3 bytes per
+                                                           // pixel
+    let output_size = width as usize * height as usize * 3; // RGB is 3 bytes
+                                                            // per pixel
 
     if data.len() != input_size {
         return Err(NokhwaError::process_frame(

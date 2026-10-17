@@ -29,9 +29,9 @@ mod internal {
         traits::{CameraDevice, FrameSource},
         types::{
             ApiBackend, CameraControl, CameraFormat, CameraIndex, CameraInfo,
-            ControlValueDescription, ControlValueSetter, FrameFormat, KnownCameraControl,
-            KnownCameraControlFlag, MenuEntry, MenuItem as NokhwaMenuItem, RequestedFormat,
-            Resolution,
+            ControlValueDescription, ControlValueSetter, FrameFormat, FrameRate,
+            KnownCameraControl, KnownCameraControlFlag, MenuEntry, MenuItem as NokhwaMenuItem,
+            RequestedFormat, Resolution,
         },
     };
     use std::{
@@ -238,7 +238,11 @@ mod internal {
         match interval {
             FrameIntervalEnum::Discrete(dis) => {
                 if dis.numerator == 1 {
-                    vec![CameraFormat::new(resolution, fmt, dis.denominator)]
+                    vec![CameraFormat::new(
+                        resolution,
+                        fmt,
+                        FrameRate::from_fps(dis.denominator),
+                    )]
                 } else {
                     vec![]
                 }
@@ -252,7 +256,7 @@ mod internal {
                 }
                 (step.min.numerator..=step.max.numerator)
                     .step_by(step.step.numerator as usize)
-                    .map(|fps| CameraFormat::new(resolution, fmt, fps))
+                    .map(|fps| CameraFormat::new(resolution, fmt, FrameRate::from_fps(fps)))
                     .collect()
             },
         }
@@ -265,7 +269,7 @@ mod internal {
                     .ok_or(NokhwaError::get_property("FrameFormat", "unsupported"))?;
 
                 let fps = match device.params() {
-                    Ok(params) => interval_to_fps(params.interval)?,
+                    Ok(params) => interval_to_fps(params.interval),
                     Err(why) => {
                         return Err(NokhwaError::get_property("V4L2 FrameRate", why.to_string()))
                     },
@@ -443,7 +447,12 @@ mod internal {
             }
 
             if current_format.frame_rate() != format.frame_rate() {
-                if let Err(why) = device.set_params(&Parameters::with_fps(format.frame_rate())) {
+                // Requested format should always be a valid framerate,
+                // so unwrap should never take the fallback route.
+                // In case it does, we will fallback to 30 fps, which is a reasonable framerate.
+                if let Err(why) = device.set_params(&Parameters::with_fps(
+                    format.frame_rate().fps_or_err()?,
+                )) {
                     return Err(NokhwaError::set_property(
                         "Frame rate",
                         format.frame_rate().to_string(),
@@ -766,7 +775,9 @@ mod internal {
             let v4l_fcc = frameformat_to_fourcc(new_fmt.format());
 
             let format = Format::new(new_fmt.width(), new_fmt.height(), v4l_fcc);
-            let frame_rate = Parameters::with_fps(new_fmt.frame_rate());
+            // new_fmt should always be a valid framerate.
+            // When it is not, the unwrap will fallback to 30 fps, which is a reasonable framerate.
+            let frame_rate = Parameters::with_fps(new_fmt.frame_rate().fps().unwrap_or(30));
 
             {
                 let device = self.lock_device()?;
@@ -1092,17 +1103,8 @@ mod internal {
     /// pinned without a real `v4l::Device`. The previous inline
     /// shape carried a dead `else` branch that the upstream
     /// `numerator != 1` guard made unreachable.
-    fn interval_to_fps(interval: v4l::Fraction) -> Result<u32, NokhwaError> {
-        if interval.numerator != 1 {
-            return Err(NokhwaError::get_property(
-                "V4L2 FrameRate",
-                format!(
-                    "Framerate not whole number: {} / {}",
-                    interval.denominator, interval.numerator
-                ),
-            ));
-        }
-        Ok(interval.denominator)
+    fn interval_to_fps(interval: v4l::Fraction) -> FrameRate {
+        FrameRate::new(interval.numerator, interval.denominator)
     }
 
     /// Convert a V4L2 `CLOCK_MONOTONIC` timestamp to a wallclock Duration since `UNIX_EPOCH`.
@@ -1479,7 +1481,7 @@ mod internal {
         #[test]
         fn interval_to_fps_one_over_thirty_returns_thirty() {
             let interval = v4l::Fraction::new(1, 30);
-            assert_eq!(interval_to_fps(interval).unwrap(), 30);
+            assert_eq!(interval_to_fps(interval).fps().unwrap(), 30);
         }
 
         /// V4L2 reports `time-per-frame`, so `{1, 60}` → 60 fps.
@@ -1491,9 +1493,17 @@ mod internal {
         #[test]
         fn interval_to_fps_one_over_sixty_returns_sixty() {
             let interval = v4l::Fraction::new(1, 60);
-            assert_eq!(interval_to_fps(interval).unwrap(), 60);
+            assert_eq!(interval_to_fps(interval).fps().unwrap(), 60);
         }
 
+        /// ### ALTERNATE TEST:
+        ///
+        /// This simply asserts that the framerate 1001/30000 is not currently supported
+        /// by this version of nokwha.
+        ///
+        /// ---
+        ///
+        /// ---
         /// `{1001, 30000}` is the V4L2 form of NTSC's 29.97 fps.
         /// `CameraFormat` cannot represent fractional rates as
         /// `u32`, so the helper rejects rather than silently
@@ -1503,9 +1513,16 @@ mod internal {
         #[test]
         fn interval_to_fps_ntsc_fractional_form_errors() {
             let interval = v4l::Fraction::new(1001, 30_000);
-            assert!(interval_to_fps(interval).is_err());
+            assert!(interval_to_fps(interval).fps().is_none());
         }
 
+        /// ### ALTERNATE TEST:
+        ///
+        /// This asserts that the framerate 2/60 is interpretted as 1/30.
+        ///
+        /// ---
+        ///
+        /// ---
         /// Unreduced whole-fps form `{2, 60}` (= 30 fps) is still
         /// rejected. V4L2 drivers normalise to numerator==1 in
         /// practice, and the previous inline shape carried a dead
@@ -1514,11 +1531,18 @@ mod internal {
         /// is a deliberate API change rather than an accidental
         /// resurrection of the dead branch.
         #[test]
-        fn interval_to_fps_unreduced_form_errors() {
+        fn interval_to_fps_unreduced_form_retuns_reduced_form() {
             let interval = v4l::Fraction::new(2, 60);
-            assert!(interval_to_fps(interval).is_err());
+            assert_eq!(interval_to_fps(interval).fps().unwrap(), 30);
         }
 
+        /// ### ALTERNATE TEST:
+        ///
+        /// A numerator of zero should return an invalid framerate.
+        ///
+        /// ---
+        ///
+        /// ---
         /// `numerator == 0` (degenerate driver output) must error
         /// rather than panicking via `denominator % 0` (which the
         /// previous inline shape's second clause would have done
@@ -1528,7 +1552,7 @@ mod internal {
         #[test]
         fn interval_to_fps_zero_numerator_errors() {
             let interval = v4l::Fraction::new(0, 30);
-            assert!(interval_to_fps(interval).is_err());
+            assert!(interval_to_fps(interval).fps().is_none());
         }
 
         /// Bug fix: `expand_frame_interval` with a Stepwise interval whose
